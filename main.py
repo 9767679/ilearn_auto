@@ -42,52 +42,43 @@ def check_ilearn_notifications():
             
             time.sleep(5)
 
-            # 嘗試多種可能的鈴鐺按鈕選擇器來點擊通知
-            print("正在尋找並點擊通知小鈴鐺...")
-            bell_clicked = False
-            selectors = [
-                "a[data-action='toggle-notification-popover']", 
-                ".fa-bell", 
-                ".popover-region-toggle", 
-                "li.nav-item:has(.fa-bell)",
-                "[data-region='notification-popover-container'] a"
-            ]
+            # 點擊右上角的小鈴鐺圖示 (Moodle 標準的通知按鈕)
+            print("正在點擊右上角通知鈴鐺...")
+            bell_selector = ".popover-region-toggle[data-region='popover-region-toggle']"
+            if page.locator(bell_selector).count() > 0:
+                page.locator(bell_selector).first.click()
+            else:
+                # 備用選擇器
+                page.locator("a:has(.fa-bell)").first.click()
             
-            for sel in selectors:
-                if page.locator(sel).count() > 0:
-                    try:
-                        page.locator(sel).first.click()
-                        print(f"成功點擊選擇器: {sel}")
-                        bell_clicked = True
-                        time.sleep(3)  # 等待彈窗展開
-                        break
-                    except Exception as e:
-                        print(f"嘗試點擊 {sel} 失敗: {e}")
+            # 等待通知彈窗完全展開並載入內容
+            time.sleep(3)
 
-            if not bell_clicked:
-                print("找不到通知鈴鐺按鈕！")
-
-            # 抓取通知選單裡的所有文字
-            print("正在解析通知內容...")
-            # 擴大範圍抓取所有可能包含通知文字的區塊
+            # 精準抓取通知彈窗內部的文字
+            print("正在解析通知彈窗內容...")
             notification_texts = []
             
-            # 嘗試抓取 Moodle 通知清單的常見 class
-            items = page.locator(".content-item, .notification, .py-2, .list-group-item, [data-region='content-item']").all_inner_texts()
-            for item in items:
-                cleaned = item.strip()
-                if cleaned and cleaned not in notification_texts and len(cleaned) > 5:
-                    notification_texts.append(cleaned)
+            # 定位通知選單的容器
+            container = page.locator(".popover-region-container, [data-region='notification-popover-container']")
+            if container.count() > 0:
+                # 抓取裡面每一個通知項目的文字
+                items = container.locator(".content-item, .notification, .py-2").all_inner_texts()
+                for item in items:
+                    cleaned = item.strip()
+                    # 過濾掉按鈕或太短的雜訊字眼
+                    if cleaned and len(cleaned) > 4 and cleaned not in ["通知", "標為已讀", "查看全部", "設定"]:
+                        if cleaned not in notification_texts:
+                            notification_texts.append(cleaned)
 
             if notification_texts:
-                # 取出前 5 筆最新的通知
+                # 取出前 5 筆最新通知
                 notif_msg = "\n\n-------------------\n\n".join(notification_texts[:5])
-                message = f"【逢甲 iLearn - 最新通知提醒】\n\n{notif_msg}"
+                message = f"【逢甲 iLearn - 最新通知公告】\n\n{notif_msg}"
                 send_to_line(message)
                 print("已成功將通知推送到 LINE！")
             else:
-                print("依然沒有抓到通知文字，改為發送頁面除訊息。")
-                send_to_line("【逢甲 iLearn 提醒】爬蟲已登入，但抓取通知區塊時未讀取到文字，請檢查選擇器。")
+                print("未抓取到通知內容。")
+                send_to_line("【逢甲 iLearn 提醒】已點擊小鈴鐺，但未成功讀取到通知內容。")
 
         except Exception as e:
             print(f"爬蟲執行發生錯誤: {e}")
