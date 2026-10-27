@@ -23,7 +23,7 @@ def send_to_line(message):
 def check_ilearn_notifications():
     print("正在啟動瀏覽器爬蟲...")
     with sync_playwright() as p:
-        # 在 GitHub Actions 上必須用 headless=True
+        # 在 GitHub Actions 或遠端環境上必須用 headless=True
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -36,57 +36,66 @@ def check_ilearn_notifications():
             page.goto("https://ilearn.fcu.edu.tw/", timeout=60000)
             page.wait_for_load_state("domcontentloaded")
 
-            # 檢查是否被導向或需要點擊登入（若首頁有「登入」按鈕或直接進入了 SSO 頁面）
-            # 如果當前網址包含 login 或者是 NID 登入頁面
-            if "login" in page.url or page.locator("input[name='username'], #username").count() > 0:
+            # 檢查是否需要進行登入
+            if "login" in page.url or page.locator("input[name='username'], #username, input[name='msoid']").count() > 0:
                 print("正在輸入 NID 帳號密碼進行登入...")
                 
                 # 填入帳號與密碼
-                page.fill("input[name='username'], #username", USERNAME)
-                page.fill("input[name='password'], #password", PASSWORD)
+                page.fill("input[name='username'], #username, input[name='msoid']", USERNAME)
+                page.fill("input[name='password'], #password, input[name='msupwd']", PASSWORD)
                 
                 # 點擊登入按鈕
-                # 逢甲 NID 登入按鈕通常是 type='submit' 或特定 class
-                page.click("button[type='submit'], input[type='submit'], .btn-login, #loginbtn")
+                page.click("button[type='submit'], input[type='submit'], .btn-login, #submit, #loginbtn")
                 
-                # 等待跳轉回 iLearn 首頁
+                # 等待跳轉回 iLearn 主畫面
                 print("等待登入跳轉...")
-                page.wait_for_url("**/ilearn.fcu.edu.tw/**", timeout=30000)
-                page.wait_for_load_state("networkidle")
-                time.sleep(3)
+                try:
+                    page.wait_for_url("**/ilearn.fcu.edu.tw/**", timeout=30000)
+                except:
+                    print("跳轉超時或網址格式不同，繼續執行...")
 
-            # 有時候首頁右上角會有登入按鈕，如果直接進首頁還沒登入，嘗試尋找頁面上的「登入」連結點擊
-            elif page.locator("a:has-text('登入'), a[href*='login']").count() > 0 and "You are not logged in" in page.content():
-                print("發現未登入狀態，正在點擊登入連結...")
-                page.locator("a:has-text('登入'), a[href*='login']").first.click()
-                page.wait_for_load_state("domcontentloaded")
-                
-                print("正在輸入 NID 帳號密碼...")
-                page.fill("input[name='username'], #username", USERNAME)
-                page.fill("input[name='password'], #password", PASSWORD)
-                page.click("button[type='submit'], input[type='submit'], .btn-login, #loginbtn")
                 page.wait_for_load_state("networkidle")
-                time.sleep(3)
+                time.sleep(5)
 
-            # 點擊右上角的小鈴鐺圖示（Moodle 標準佈景主題的通知鈴鐺）
-            print("正在尋找並點擊右上角通知鈴鐺...")
-            bell_selector = ".popover-region-toggle[data-region='popover-region-toggle'], a[data-title='通知'], .fa-bell"
-            page.wait_for_selector(bell_selector, timeout=15000)
-            page.locator(bell_selector).first.click()
+            # 登入後截圖確認是否成功進入首頁（可在 GitHub Artifacts 下載檢視）
+            print(f"當前網址: {page.url}")
+            page.screenshot(path="after_login.png")
+
+            # 嘗試多種可能找到鈴鐺的 Selector（增強容錯率）
+            print("正在尋找通知鈴鐺...")
+            bell_selectors = [
+                ".popover-region-toggle[data-region='popover-region-toggle']",
+                "a[data-title='通知']",
+                "a:has(.fa-bell)",
+                ".fa-bell",
+                "nav.navbar .fa-bell"
+            ]
+            
+            bell_element = None
+            for selector in bell_selectors:
+                if page.locator(selector).count() > 0:
+                    bell_element = page.locator(selector).first
+                    print(f"成功找到鈴鐺元素，使用選擇器: {selector}")
+                    break
+            
+            if bell_element:
+                bell_element.click()
+            else:
+                print("找不到鈴鐺，儲存截圖進行除錯...")
+                page.screenshot(path="no_bell_found.png")
+                raise Exception("無法在頁面上找到通知鈴鐺（可能是登入未成功或版面已變更）")
             
             # 確保通知彈窗已載入
             print("正在解析通知彈窗內容...")
-            time.sleep(3) # 給 AJAX 一點時間載入清單
+            time.sleep(3) # 給 Moodle AJAX 載入清單的時間
             
             notification_texts = []
-            # Moodle 通知選單容器
             container = page.locator(".popover-region-container, [data-region='notification-popover-container'], .popover-content")
             
             if container.count() > 0:
                 items = container.locator(".content-item, .notification, .py-2, .list-group-item, p").all_inner_texts()
                 for item in items:
                     cleaned = item.strip()
-                    # 過濾掉介面常見的冗長按鈕文字
                     if cleaned and len(cleaned) > 4 and cleaned not in ["通知", "標為已讀", "查看全部", "設定", "沒有通知"]:
                         if cleaned not in notification_texts:
                             notification_texts.append(cleaned)
@@ -97,19 +106,18 @@ def check_ilearn_notifications():
                 send_to_line(message)
                 print("已成功將通知推送到 LINE！")
             else:
-                print("未抓取到通知內容，嘗試截圖以供除錯...")
+                print("未抓取到通知內容，儲存截圖以供除錯...")
                 page.screenshot(path="debug_screenshot.png")
-                # 順便印出當前網頁文字以便查看原因
-                print("當前頁面片段:", page.content()[:500])
-                send_to_line("【逢甲 iLearn 提醒】已嘗試點擊小鈴鐺，但未成功讀取到具體通知內容。")
+                send_to_line("【逢甲 iLearn 提醒】已嘗試點擊小鈴鐺，但未成功讀取到具體的通知內容。")
 
         except Exception as e:
-            print(f"爬蟲執行發生錯誤: {e}")
+            error_msg = str(e)
+            print(f"爬蟲執行發生錯誤: {error_msg}")
             try:
                 page.screenshot(path="error_screenshot.png")
             except:
                 pass
-            send_to_line(f"【逢甲 iLearn 錯誤通知】爬蟲執行失敗: {str(e)}")
+            send_to_line(f"【逢甲 iLearn 錯誤通知】爬蟲執行失敗: {error_msg}")
         finally:
             browser.close()
 
