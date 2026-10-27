@@ -32,42 +32,62 @@ def check_ilearn_notifications():
         page = context.new_page()
 
         try:
-            print("正在前往 iLearn...")
+            print("正在前往逢甲 iLearn...")
             page.goto("https://ilearn.fcu.edu.tw/", timeout=60000)
             page.wait_for_load_state("domcontentloaded")
 
-            # 處理登入（根據學校 SSO 頁面調整）
-            if page.locator("input[name='username'], #username, input[name='msoid']").count() > 0:
-                print("正在輸入帳號密碼進行登入...")
-                # 填入帳號與密碼（請確保欄位選擇器涵蓋學校的輸入框）
-                page.fill("input[name='username'], #username, input[name='msoid']", USERNAME)
-                page.fill("input[name='password'], #password, input[name='msupwd']", PASSWORD)
+            # 檢查是否被導向或需要點擊登入（若首頁有「登入」按鈕或直接進入了 SSO 頁面）
+            # 如果當前網址包含 login 或者是 NID 登入頁面
+            if "login" in page.url or page.locator("input[name='username'], #username").count() > 0:
+                print("正在輸入 NID 帳號密碼進行登入...")
                 
-                # 點擊登入
-                page.click("button[type='submit'], input[type='submit'], .btn-submit, #submit")
+                # 填入帳號與密碼
+                page.fill("input[name='username'], #username", USERNAME)
+                page.fill("input[name='password'], #password", PASSWORD)
                 
-                # 等待登入後跳轉完成
+                # 點擊登入按鈕
+                # 逢甲 NID 登入按鈕通常是 type='submit' 或特定 class
+                page.click("button[type='submit'], input[type='submit'], .btn-login, #loginbtn")
+                
+                # 等待跳轉回 iLearn 首頁
+                print("等待登入跳轉...")
+                page.wait_for_url("**/ilearn.fcu.edu.tw/**", timeout=30000)
                 page.wait_for_load_state("networkidle")
-                time.sleep(5)
+                time.sleep(3)
 
-            # 點擊右上角的小鈴鐺圖示
-            print("正在點擊右上角通知鈴鐺...")
-            bell_selector = ".popover-region-toggle[data-region='popover-region-toggle'], a:has(.fa-bell)"
+            # 有時候首頁右上角會有登入按鈕，如果直接進首頁還沒登入，嘗試尋找頁面上的「登入」連結點擊
+            elif page.locator("a:has-text('登入'), a[href*='login']").count() > 0 and "You are not logged in" in page.content():
+                print("發現未登入狀態，正在點擊登入連結...")
+                page.locator("a:has-text('登入'), a[href*='login']").first.click()
+                page.wait_for_load_state("domcontentloaded")
+                
+                print("正在輸入 NID 帳號密碼...")
+                page.fill("input[name='username'], #username", USERNAME)
+                page.fill("input[name='password'], #password", PASSWORD)
+                page.click("button[type='submit'], input[type='submit'], .btn-login, #loginbtn")
+                page.wait_for_load_state("networkidle")
+                time.sleep(3)
+
+            # 點擊右上角的小鈴鐺圖示（Moodle 標準佈景主題的通知鈴鐺）
+            print("正在尋找並點擊右上角通知鈴鐺...")
+            bell_selector = ".popover-region-toggle[data-region='popover-region-toggle'], a[data-title='通知'], .fa-bell"
             page.wait_for_selector(bell_selector, timeout=15000)
             page.locator(bell_selector).first.click()
             
             # 確保通知彈窗已載入
             print("正在解析通知彈窗內容...")
-            time.sleep(3) # 給 Moodle 一點時間透過 AJAX 載入清單
+            time.sleep(3) # 給 AJAX 一點時間載入清單
             
             notification_texts = []
-            container = page.locator(".popover-region-container, [data-region='notification-popover-container']")
+            # Moodle 通知選單容器
+            container = page.locator(".popover-region-container, [data-region='notification-popover-container'], .popover-content")
             
             if container.count() > 0:
-                items = container.locator(".content-item, .notification, .py-2, .list-group-item").all_inner_texts()
+                items = container.locator(".content-item, .notification, .py-2, .list-group-item, p").all_inner_texts()
                 for item in items:
                     cleaned = item.strip()
-                    if cleaned and len(cleaned) > 4 and cleaned not in ["通知", "標為已讀", "查看全部", "設定"]:
+                    # 過濾掉介面常見的冗長按鈕文字
+                    if cleaned and len(cleaned) > 4 and cleaned not in ["通知", "標為已讀", "查看全部", "設定", "沒有通知"]:
                         if cleaned not in notification_texts:
                             notification_texts.append(cleaned)
 
@@ -79,11 +99,12 @@ def check_ilearn_notifications():
             else:
                 print("未抓取到通知內容，嘗試截圖以供除錯...")
                 page.screenshot(path="debug_screenshot.png")
-                send_to_line("【逢甲 iLearn 提醒】已點擊小鈴鐺，但未成功讀取到通知內容。")
+                # 順便印出當前網頁文字以便查看原因
+                print("當前頁面片段:", page.content()[:500])
+                send_to_line("【逢甲 iLearn 提醒】已嘗試點擊小鈴鐺，但未成功讀取到具體通知內容。")
 
         except Exception as e:
             print(f"爬蟲執行發生錯誤: {e}")
-            # 發生錯誤時截圖（若在本地可檢視，GitHub Actions 可設定上傳截圖 Artifact）
             try:
                 page.screenshot(path="error_screenshot.png")
             except:
