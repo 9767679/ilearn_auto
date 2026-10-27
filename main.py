@@ -20,22 +20,6 @@ def send_to_line(message):
     response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=data)
     print(f"LINE 推送結果: {response.status_code}")
 
-def format_time(dt_str):
-    try:
-        # 移除結尾的 'Z' 並解析時間字串
-        clean_str = dt_str.strip().rstrip('Z')
-        dt_utc = datetime.strptime(clean_str, "%Y%m%dT%H%M%S")
-        
-        # 設定為 UTC 時區，並轉換成台灣時間 (UTC+8)
-        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-        dt_tw = dt_utc.astimezone(timezone(timedelta(hours=8)))
-        
-        # 轉成清楚好讀的格式，例如: 2026-11-07 23:59
-        return dt_tw.strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        # 如果格式解析失敗，就原樣回傳
-        return dt_str
-
 def check_calendar():
     print("正在下載 iLearn 行事曆...")
     headers = {
@@ -52,21 +36,46 @@ def check_calendar():
         events = []
         current_summary = None
         
+        # 設定台灣時區 (UTC+8)
+        tw_timezone = timezone(timedelta(hours=8))
+        now_tw = datetime.now(tw_timezone)
+        end_time = now_tw + timedelta(days=7) # 計算 7 天後的的時間
+        
         for line in ics_content.splitlines():
             if line.startswith("SUMMARY:"):
                 current_summary = line.replace("SUMMARY:", "")
             elif line.startswith("DTSTART:") and current_summary:
                 raw_dt = line.replace("DTSTART:", "")
-                formatted_dt = format_time(raw_dt)
-                events.append(f"📌 {current_summary}\n   ⏱ 截止: {formatted_dt}")
+                try:
+                    clean_str = raw_dt.strip().rstrip('Z')
+                    dt_utc = datetime.strptime(clean_str, "%Y%m%dT%H%M%S")
+                    dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+                    dt_tw = dt_utc.astimezone(tw_timezone)
+                    
+                    # 判斷是否介於「現在」到「未來 7 天內」
+                    if now_tw <= dt_tw <= end_time:
+                        events.append({
+                            "summary": current_summary,
+                            "time": dt_tw,
+                            "formatted_time": dt_tw.strftime("%Y-%m-%d %H:%M")
+                        })
+                except Exception as e:
+                    print(f"時間解析失敗: {e}")
+                
                 current_summary = None
 
+        # 依照時間先後順序排序（最近要交的排最前面）
+        events.sort(key=lambda x: x["time"])
+
         if events:
-            message = "【逢甲 iLearn 作業與行事曆提醒】\n\n" + "\n\n".join(events[:8])
+            event_strings = [f"📌 {e['summary']}\n   ⏱ 截止: {e['formatted_time']}" for e in events]
+            message = "【逢甲 iLearn - 未來 7 天作業提醒】\n\n" + "\n\n".join(event_strings)
             send_to_line(message)
             print("已成功發送 LINE 通知！")
         else:
-            print("目前沒有找到行事曆事件。")
+            print("未來 7 天內沒有找到行事曆事件。")
+            # 如果希望這期間沒作業時也讓 LINE 收到「目前無作業」的訊息，可以把下面這行取消註解
+            # send_to_line("【逢甲 iLearn 提醒】太棒了！未來 7 天內沒有檢測到新的作業或行事曆事件 🎉")
 
     except Exception as e:
         print(f"連線或解析發生錯誤: {e}")
