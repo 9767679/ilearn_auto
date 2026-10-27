@@ -1,12 +1,14 @@
 import os
-import requests
+import time
 from datetime import datetime, timezone, timedelta
+import requests
+from playwright.sync_api import sync_playwright
 
-# 從 GitHub Secrets 讀取 LINE 資訊
+# 從 GitHub Secrets 讀取資訊
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("LINE_USER_ID")
-
-ICAL_URL = "https://ilearn.fcu.edu.tw/calendar/export_execute.php?userid=172807&authtoken=477c043d7a00f87cad68d5b5ab5a7aecd07b6877&preset_what=all&preset_time=custom"
+USERNAME = os.environ.get("ILEARN_USERNAME")
+PASSWORD = os.environ.get("ILEARN_PASSWORD")
 
 def send_to_line(message):
     headers = {
@@ -20,65 +22,65 @@ def send_to_line(message):
     response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=data)
     print(f"LINE 推送結果: {response.status_code}")
 
-def check_calendar():
-    print("正在下載 iLearn 行事曆...")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    try:
-        response = requests.get(ICAL_URL, headers=headers, timeout=15)
-        if response.status_code != 200:
-            print(f"無法下載行事曆資料，狀態碼: {response.status_code}")
-            return
+def check_ilearn_notifications():
+    print("正在啟動瀏覽器爬蟲...")
+    with sync_playwright() as p:
+        # 啟動無頭瀏覽器 (headless=True 適合在 GitHub Actions 雲端執行)
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        page = context.new_page()
 
-        ics_content = response.text
-        events = []
-        current_summary = None
-        
-        # 設定台灣時區 (UTC+8)
-        tw_timezone = timezone(timedelta(hours=8))
-        now_tw = datetime.now(tw_timezone)
-        end_time = now_tw + timedelta(days=7) # 計算 7 天後的的時間
-        
-        for line in ics_content.splitlines():
-            if line.startswith("SUMMARY:"):
-                current_summary = line.replace("SUMMARY:", "")
-            elif line.startswith("DTSTART:") and current_summary:
-                raw_dt = line.replace("DTSTART:", "")
-                try:
-                    clean_str = raw_dt.strip().rstrip('Z')
-                    dt_utc = datetime.strptime(clean_str, "%Y%m%dT%H%M%S")
-                    dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-                    dt_tw = dt_utc.astimezone(tw_timezone)
-                    
-                    # 判斷是否介於「現在」到「未來 7 天內」
-                    if now_tw <= dt_tw <= end_time:
-                        events.append({
-                            "summary": current_summary,
-                            "time": dt_tw,
-                            "formatted_time": dt_tw.strftime("%Y-%m-%d %H:%M")
-                        })
-                except Exception as e:
-                    print(f"時間解析失敗: {e}")
-                
-                current_summary = None
+        try:
+            # 1. 前往 iLearn 首頁
+            print("正在前往 iLearn...")
+            page.goto("https://ilearn.fcu.edu.tw/", timeout=60000)
+            page.wait_for_load_state("networkidle")
 
-        # 依照時間先後順序排序（最近要交的排最前面）
-        events.sort(key=lambda x: x["time"])
+            # 2. 處理登入流程（如果需要導向學校 SSO 登入頁面）
+            # 點擊登入或檢查是否有輸入帳號欄位
+            if page.locator("input[name='username']").count() > 0 or page.locator("#username").count() > 0:
+                print("正在輸入帳號密碼進行登入...")
+                page.fill("input[name='username'], #username", USERNAME)
+                page.fill("input[name='password'], #password", PASSWORD)
+                page.click("button[type='submit'], input[type='submit'], .btn-submit")
+                page.wait_for_load_state("networkidle")
+            
+            # 給予一點緩衝時間讓頁面完全載入
+            time.sleep(5)
 
-        if events:
-            event_strings = [f"📌 {e['summary']}\n   ⏱ 截止: {e['formatted_time']}" for e in events]
-            message = "【逢甲 iLearn - 未來 7 天作業提醒】\n\n" + "\n\n".join(event_strings)
-            send_to_line(message)
-            print("已成功發送 LINE 通知！")
-        else:
-            print("未來 7 天內沒有找到行事曆事件。")
-            # 如果希望這期間沒作業時也讓 LINE 收到「目前無作業」的訊息，可以把下面這行取消註解
-            # send_to_line("【逢甲 iLearn 提醒】太棒了！未來 7 天內沒有檢測到新的作業或行事曆事件 🎉")
+            # 3. 點擊右上角的通知小鈴鐺
+            print("正在尋找通知小鈴鐺...")
+            # 嘗試點擊鈴鐺圖示 (通常帶有通知數字或鈴鐺 class)
+            bell_selector = "nav .fa-bell, .fa-regular.fa-bell, [data-region='notification-popover-container']"
+            if page.locator(bell_selector).count() > 0:
+                page.locator(bell_selector).first.click()
+                time.sleep(2) # 等待通知彈窗展開
 
-    except Exception as e:
-        print(f"連線或解析發生錯誤: {e}")
+            # 4. 抓取通知內容
+            print("正在解析通知清單...")
+            # 抓取通知選單中的文字內容
+            notification_items = page.locator(".content-item, .notification-message, [data-region='content-item']").all_inner_texts()
+            
+            if not notification_items:
+                # 備用方案：如果找不到特定 class，直接抓取頁面上右側通知彈窗的文字
+                print("嘗試使用備用選擇器抓取通知...")
+                notification_items = page.locator("div.popover-body, .popover-region-content").all_inner_texts()
+
+            if notification_items:
+                # 清理並組合訊息
+                notif_text = "\n-------------------\n".join([item.strip() for item in notification_items[:5]])
+                message = f"【逢甲 iLearn - 最新通知提醒】\n\n{notif_text}"
+                send_to_line(message)
+                print("已成功將通知推送到 LINE！")
+            else:
+                print("目前沒有抓到新的通知內容。")
+                send_to_line("【逢甲 iLearn 提醒】目前沒有檢測到新的通知訊息。")
+
+        except Exception as e:
+            print(f"爬蟲執行發生錯誤: {e}")
+            send_to_line(f"【逢甲 iLearn 錯誤通知】爬蟲執行失敗: {str(e)}")
+        finally:
+            browser.close()
 
 if __name__ == "__main__":
-    check_calendar()
+    check_ilearn_notifications()
