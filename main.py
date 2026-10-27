@@ -1,10 +1,8 @@
 import os
 import time
-from datetime import datetime, timezone, timedelta
 import requests
 from playwright.sync_api import sync_playwright
 
-# 從 GitHub Secrets 讀取資訊
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("LINE_USER_ID")
 USERNAME = os.environ.get("ILEARN_USERNAME")
@@ -25,19 +23,16 @@ def send_to_line(message):
 def check_ilearn_notifications():
     print("正在啟動瀏覽器爬蟲...")
     with sync_playwright() as p:
-        # 啟動無頭瀏覽器 (headless=True 適合在 GitHub Actions 雲端執行)
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = context.new_page()
 
         try:
-            # 1. 前往 iLearn 首頁
             print("正在前往 iLearn...")
             page.goto("https://ilearn.fcu.edu.tw/", timeout=60000)
             page.wait_for_load_state("networkidle")
 
-            # 2. 處理登入流程（如果需要導向學校 SSO 登入頁面）
-            # 點擊登入或檢查是否有輸入帳號欄位
+            # 處理登入
             if page.locator("input[name='username']").count() > 0 or page.locator("#username").count() > 0:
                 print("正在輸入帳號密碼進行登入...")
                 page.fill("input[name='username'], #username", USERNAME)
@@ -45,36 +40,54 @@ def check_ilearn_notifications():
                 page.click("button[type='submit'], input[type='submit'], .btn-submit")
                 page.wait_for_load_state("networkidle")
             
-            # 給予一點緩衝時間讓頁面完全載入
             time.sleep(5)
 
-            # 3. 點擊右上角的通知小鈴鐺
-            print("正在尋找通知小鈴鐺...")
-            # 嘗試點擊鈴鐺圖示 (通常帶有通知數字或鈴鐺 class)
-            bell_selector = "nav .fa-bell, .fa-regular.fa-bell, [data-region='notification-popover-container']"
-            if page.locator(bell_selector).count() > 0:
-                page.locator(bell_selector).first.click()
-                time.sleep(2) # 等待通知彈窗展開
-
-            # 4. 抓取通知內容
-            print("正在解析通知清單...")
-            # 抓取通知選單中的文字內容
-            notification_items = page.locator(".content-item, .notification-message, [data-region='content-item']").all_inner_texts()
+            # 嘗試多種可能的鈴鐺按鈕選擇器來點擊通知
+            print("正在尋找並點擊通知小鈴鐺...")
+            bell_clicked = False
+            selectors = [
+                "a[data-action='toggle-notification-popover']", 
+                ".fa-bell", 
+                ".popover-region-toggle", 
+                "li.nav-item:has(.fa-bell)",
+                "[data-region='notification-popover-container'] a"
+            ]
             
-            if not notification_items:
-                # 備用方案：如果找不到特定 class，直接抓取頁面上右側通知彈窗的文字
-                print("嘗試使用備用選擇器抓取通知...")
-                notification_items = page.locator("div.popover-body, .popover-region-content").all_inner_texts()
+            for sel in selectors:
+                if page.locator(sel).count() > 0:
+                    try:
+                        page.locator(sel).first.click()
+                        print(f"成功點擊選擇器: {sel}")
+                        bell_clicked = True
+                        time.sleep(3)  # 等待彈窗展開
+                        break
+                    except Exception as e:
+                        print(f"嘗試點擊 {sel} 失敗: {e}")
 
-            if notification_items:
-                # 清理並組合訊息
-                notif_text = "\n-------------------\n".join([item.strip() for item in notification_items[:5]])
-                message = f"【逢甲 iLearn - 最新通知提醒】\n\n{notif_text}"
+            if not bell_clicked:
+                print("找不到通知鈴鐺按鈕！")
+
+            # 抓取通知選單裡的所有文字
+            print("正在解析通知內容...")
+            # 擴大範圍抓取所有可能包含通知文字的區塊
+            notification_texts = []
+            
+            # 嘗試抓取 Moodle 通知清單的常見 class
+            items = page.locator(".content-item, .notification, .py-2, .list-group-item, [data-region='content-item']").all_inner_texts()
+            for item in items:
+                cleaned = item.strip()
+                if cleaned and cleaned not in notification_texts and len(cleaned) > 5:
+                    notification_texts.append(cleaned)
+
+            if notification_texts:
+                # 取出前 5 筆最新的通知
+                notif_msg = "\n\n-------------------\n\n".join(notification_texts[:5])
+                message = f"【逢甲 iLearn - 最新通知提醒】\n\n{notif_msg}"
                 send_to_line(message)
                 print("已成功將通知推送到 LINE！")
             else:
-                print("目前沒有抓到新的通知內容。")
-                send_to_line("【逢甲 iLearn 提醒】目前沒有檢測到新的通知訊息。")
+                print("依然沒有抓到通知文字，改為發送頁面除訊息。")
+                send_to_line("【逢甲 iLearn 提醒】爬蟲已登入，但抓取通知區塊時未讀取到文字，請檢查選擇器。")
 
         except Exception as e:
             print(f"爬蟲執行發生錯誤: {e}")
