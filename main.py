@@ -37,30 +37,27 @@ def check_ilearn_notifications():
             page.wait_for_load_state("domcontentloaded")
             time.sleep(3)
 
-            # 1. 點擊右上角的「登入」按鈕（對應第一張圖）
-            login_btn_selector = "a:has-text('登入'), text='登入'"
-            if page.locator(login_btn_selector).count() > 0:
+            # 1. 點擊右上角的「登入」按鈕（修正選擇器語法）
+            login_btn = page.locator("a:has-text('登入')")
+            if login_btn.count() > 0:
                 print("正在點擊首頁右上角的「登入」...")
-                page.locator(login_btn_selector).first.click()
+                login_btn.first.click()
                 time.sleep(2) # 等待彈出登入框
 
-            # 2. 輸入帳號與密碼（對應第二張圖的 placeholder 或是欄位）
+            # 2. 輸入帳號與密碼
             print("正在輸入 NID 帳號與密碼...")
             
-            # 尋找帳號輸入框 (透過 placeholder="帳號" 或常見 name)
             username_selector = "input[placeholder='帳號'], input[name='username'], #username"
             page.wait_for_selector(username_selector, timeout=10000)
             page.fill(username_selector, USERNAME)
             
-            # 尋找密碼輸入框
             password_selector = "input[placeholder='密碼'], input[name='password'], #password"
             page.fill(password_selector, PASSWORD)
             
             # 3. 點擊彈出框內的紅色「登入」按鈕
             print("點擊登入按鈕...")
-            # 透過按鈕文字「登入」來精準點擊彈窗內的送出按鈕
-            submit_selector = "button:has-text('登入'), input[value='登入'], .btn-login, button[type='submit']"
-            page.locator(submit_selector).first.click()
+            submit_btn = page.locator("button:has-text('登入'), input[value='登入'], .btn-login, button[type='submit']")
+            submit_btn.first.click()
             
             # 4. 等待登入完成並跳回主畫面
             print("等待登入跳轉...")
@@ -69,14 +66,13 @@ def check_ilearn_notifications():
 
             print(f"目前所在網址: {page.url}")
 
-            # 5. 點擊右上角的小鈴鐺（對應第三張圖右上角的位置）
+            # 5. 點擊右上角的小鈴鐺
             print("正在尋找並點擊右上角通知鈴鐺...")
             bell_selectors = [
-                "a[href*='notification'], .fa-bell",
+                "a[href*='notification']",
+                ".fa-bell",
                 ".popover-region-toggle",
-                "a[data-title='通知']",
-                "nav.navbar .fa-bell",
-                "header .fa-bell"
+                "a[data-title='通知']"
             ]
             
             bell_element = None
@@ -93,7 +89,7 @@ def check_ilearn_notifications():
             
             # 6. 解析通知彈窗內容
             print("正在解析通知彈窗內容...")
-            time.sleep(3) # 給 AJAX 載入時間
+            time.sleep(3)
             
             notification_texts = []
             container = page.locator(".popover-region-container, [data-region='notification-popover-container'], .popover-content")
