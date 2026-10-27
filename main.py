@@ -1,12 +1,13 @@
 import os
 import requests
-from playwright.sync_api import sync_playwright
+from datetime import datetime, timedelta
 
-# 從 GitHub Secrets 讀取敏感資訊
-USERNAME = os.environ.get("ILEARN_USERNAME")
-PASSWORD = os.environ.get("ILEARN_PASSWORD")
+# 從 GitHub Secrets 讀取 LINE 資訊
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("LINE_USER_ID")
+
+# 你的 iLearn 動態行事曆網址
+ICAL_URL = "https://ilearn.fcu.edu.tw/calendar/export_execute.php?userid=172807&authtoken=477c043d7a00f87cad68d5b5ab5a7aecd07b6877&preset_what=all&preset_time=custom"
 
 def send_to_line(message):
     headers = {
@@ -20,48 +21,33 @@ def send_to_line(message):
     response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=data)
     print(f"LINE 推送結果: {response.status_code}")
 
-def check_ilearn():
-    with sync_playwright() as p:
-        # 啟動無頭瀏覽器（在 GitHub Actions 雲端上執行時必須是 headless=True）
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+def check_calendar():
+    print("正在下載 iLearn 行事曆...")
+    response = requests.get(ICAL_URL)
+    if response.status_code != 200:
+        print("無法下載行事曆資料")
+        return
 
-        try:
-            print("正在前往 iLearn 登入頁面...")
-            page.goto("https://ilearn.fcu.edu.tw/")
-            
-            # 點擊登入按鈕或導向至學校 SSO 登入頁面
-            # （需根據逢甲實際登入按鈕調整，通常點擊登入會導向至學校授權頁）
-            # page.click("text=登入") # 依實際網頁結構調整
-            
-            # 輸入帳號密碼 (需對應學校 SSO 輸入框的 HTML id 或 name)
-            # page.fill("input[name='username']", USERNAME)
-            # page.fill("input[name='password']", PASSWORD)
-            # page.click("button[type='submit']")
+    ics_content = response.text
+    
+    # 簡單解析 .ics 內容，找出事件
+    events = []
+    current_summary = None
+    
+    for line in ics_content.splitlines():
+        if line.startswith("SUMMARY:"):
+            current_summary = line.replace("SUMMARY:", "")
+        elif line.startswith("DTSTART:") and current_summary:
+            dt_str = line.replace("DTSTART:", "")
+            events.append(f"📌 {current_summary} (時間: {dt_str})")
+            current_summary = None
 
-            # 等待登入成功並跳轉回首頁
-            page.wait_for_url("https://ilearn.fcu.edu.tw/my/", timeout=30000)
-            print("登入成功！正在尋找未完成作業...")
-
-            # 抓取作業清單邏輯 (需根據 iLearn 未繳交作業區塊的 CSS Selector 調整)
-            # 這裡示範抓取特定區塊的文字
-            assignments = []
-            # items = page.locator(".event-item").all()
-            # for item in items:
-            #     assignments.append(item.inner_text())
-
-            if assignments:
-                message = "【逢甲 iLearn 作業提醒】\n" + "\n".join(assignments)
-                send_to_line(message)
-            else:
-                print("目前沒有新作業或快到期的項目。")
-
-        except Exception as e:
-            print(f"執行過程中發生錯誤: {e}")
-            send_to_line(f"⚠️ iLearn 自動爬蟲發生錯誤，請檢查 GitHub 記錄。")
-        
-        finally:
-            browser.close()
+    if events:
+        # 取出近期或前幾筆作業
+        message = "【逢甲 iLearn 作業與行事曆提醒】\n\n" + "\n".join(events[:10])
+        send_to_line(message)
+    else:
+        print("目前沒有找到行事曆事件。")
 
 if __name__ == "__main__":
-    check_ilearn()
+    check_calendar()
