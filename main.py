@@ -23,7 +23,6 @@ def send_to_line(message):
 def check_ilearn_notifications():
     print("正在啟動瀏覽器爬蟲...")
     with sync_playwright() as p:
-        # 在 GitHub Actions 上必須用 headless=True
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -37,38 +36,39 @@ def check_ilearn_notifications():
             page.wait_for_load_state("domcontentloaded")
             time.sleep(3)
 
-            print(f"初始網頁標題: {page.title()}, 網址: {page.url}")
+            print(f"初始網址: {page.url}")
 
-            # 檢查是否需要進行登入（如果頁面上有輸入框，或被導向登入頁）
+            # 檢查是否需要進行登入
             login_input_selector = "input[name='username'], #username, input[name='msoid'], input[name='IDToken1']"
             
             if page.locator(login_input_selector).count() > 0 or "login" in page.url or "sso" in page.url:
                 print("偵測到登入頁面，正在輸入 NID 帳號密碼...")
-                
-                # 填入帳號與密碼
                 page.fill(login_input_selector, USERNAME)
                 
                 password_input_selector = "input[name='password'], #password, input[name='msupwd'], input[name='IDToken2']"
                 page.fill(password_input_selector, PASSWORD)
                 
-                # 點擊登入按鈕
                 submit_selector = "button[type='submit'], input[type='submit'], .btn-login, #submit, #loginbtn, button.login-btn"
                 if page.locator(submit_selector).count() > 0:
                     page.click(submit_selector)
                 else:
-                    # 如果找不到按鈕，嘗試直接按 Enter 鍵
                     page.press(password_input_selector, "Enter")
                 
                 print("等待登入跳轉...")
-                time.sleep(5)
+                time.sleep(6)
                 page.wait_for_load_state("networkidle")
 
-            # 每次執行都強制截圖，方便你檢查登入後的畫面
-            print(f"登入後網址: {page.url}")
-            page.screenshot(path="after_login.png")
+            # 印出當前網址與頁面文字內容到 console (可在 GitHub Actions Logs 中直接看到)
+            print(f"目前所在網址: {page.url}")
+            print("--- 當前網頁文字內容預覽 ---")
+            try:
+                body_text = page.inner_text("body")
+                print(body_text[:1000]) # 印出前 1000 個字
+            except Exception as e:
+                print(f"無法讀取網頁文字: {e}")
+            print("----------------------------")
 
             # 尋找通知鈴鐺
-            print("正在尋找通知鈴鐺...")
             bell_selectors = [
                 ".popover-region-toggle",
                 "a[data-title='通知']",
@@ -87,10 +87,7 @@ def check_ilearn_notifications():
             if bell_element:
                 bell_element.click()
             else:
-                # 把當前頁面的文字印出來幫忙除錯
-                print("當前頁面文字預覽:", page.inner_text("body")[:300])
-                page.screenshot(path="no_bell_found.png")
-                raise Exception("無法在頁面上找到通知鈴鐺（可能是登入未成功或版面已變更）")
+                raise Exception("無法在頁面上找到通知鈴鐺（可能是登入未成功或被導向其他頁面）")
             
             # 解析通知彈窗內容
             print("正在解析通知彈窗內容...")
@@ -113,17 +110,11 @@ def check_ilearn_notifications():
                 send_to_line(message)
                 print("已成功將通知推送到 LINE！")
             else:
-                print("未抓取到通知內容，儲存截圖以供除錯...")
-                page.screenshot(path="debug_screenshot.png")
                 send_to_line("【逢甲 iLearn 提醒】已嘗試點擊小鈴鐺，但未成功讀取到具體的通知內容。")
 
         except Exception as e:
             error_msg = str(e)
             print(f"爬蟲執行發生錯誤: {error_msg}")
-            try:
-                page.screenshot(path="error_screenshot.png")
-            except:
-                pass
             send_to_line(f"【逢甲 iLearn 錯誤通知】爬蟲執行失敗: {error_msg}")
         finally:
             browser.close()
