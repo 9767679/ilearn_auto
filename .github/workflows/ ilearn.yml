@@ -31,3 +31,10 @@ jobs:
           ILEARN_PASSWORD: ${{ secrets.ILEARN_PASSWORD }}
         run: |
           python main.py
+
+env:
+  LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
+  LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+  ILEARN_USERNAME: ${{ secrets.ILEARN_USERNAME }}
+  ILEARN_PASSWORD: ${{ secrets.ILEARN_PASSWORD }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

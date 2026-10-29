@@ -1,12 +1,17 @@
 import os
 import time
 import requests
+from openai import OpenAI
 from playwright.sync_api import sync_playwright
 
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("LINE_USER_ID")
 USERNAME = os.environ.get("ILEARN_USERNAME")
 PASSWORD = os.environ.get("ILEARN_PASSWORD")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # 記得在 GitHub Secrets 設定
+
+# 初始化 OpenAI 客戶端
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def send_to_line(message):
     headers = {
@@ -19,6 +24,30 @@ def send_to_line(message):
     }
     response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=data)
     print(f"LINE 推送結果: {response.status_code}")
+
+def summarize_with_chatgpt(notifications_text):
+    """讓 ChatGPT 幫忙整理與摘要通知內容"""
+    try:
+        print("正在透過 ChatGPT 整理通知內容...")
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", # 便宜又快速的模型
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是一個大學生智慧助理。請幫忙將以下的 iLearn 學校通知內容進行精簡摘要，萃取出關鍵的作業繳交期限、考試資訊或重要公告。排版要乾淨易讀，適合在 LINE 上閱讀。"
+                },
+                {
+                    "role": "user",
+                    "content": notifications_text
+                }
+            ],
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"ChatGPT 處理失敗: {e}")
+        # 如果 ChatGPT 失敗，至少回傳原本抓到的文字
+        return notifications_text
 
 def check_ilearn_notifications():
     print("正在啟動瀏覽器爬蟲...")
@@ -36,7 +65,7 @@ def check_ilearn_notifications():
             page.wait_for_load_state("domcontentloaded")
             time.sleep(3)
 
-            # 1. 點擊首頁右上角的「登入」按鈕
+            # 1. 點擊右上角的「登入」按鈕
             login_btn = page.locator("a:has-text('登入')")
             if login_btn.count() > 0:
                 print("正在點擊首頁右上角的「登入」...")
@@ -62,9 +91,7 @@ def check_ilearn_notifications():
             time.sleep(5)
             page.wait_for_load_state("networkidle")
 
-            print(f"目前所在網址: {page.url}")
-
-            # 5. 精準點擊右上角的小鈴鐺（排除掉設定連結）
+            # 5. 點擊右上角的小鈴鐺
             print("正在尋找並點擊右上角通知鈴鐺...")
             bell_selectors = [
                 ".popover-region-toggle[data-region='popover-region-toggle']",
@@ -78,7 +105,6 @@ def check_ilearn_notifications():
                 element = page.locator(selector).first
                 if element.count() > 0 and element.is_visible():
                     bell_element = element
-                    print(f"成功找到並確認可見的鈴鐺元素，使用選擇器: {selector}")
                     break
             
             if bell_element:
@@ -102,10 +128,14 @@ def check_ilearn_notifications():
                             notification_texts.append(cleaned)
 
             if notification_texts:
-                notif_msg = "\n\n-------------------\n\n".join(notification_texts[:5])
-                message = f"【逢甲 iLearn - 最新通知公告】\n\n{notif_msg}"
+                raw_text = "\n".join(notification_texts[:5])
+                
+                # 呼叫 ChatGPT 進行智慧整理
+                final_content = summarize_with_chatgpt(raw_text)
+                
+                message = f"🤖 【iLearn 智慧助理通知】\n\n{final_content}"
                 send_to_line(message)
-                print("已成功將通知推送到 LINE！")
+                print("已成功將 AI 整理後的通知推送到 LINE！")
             else:
                 send_to_line("【逢甲 iLearn 提醒】已成功點擊小鈴鐺，但目前沒有抓取到新的通知內容。")
 
